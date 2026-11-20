@@ -1,0 +1,189 @@
+diff --git a/src/backends/tftespi.cpp b/src/backends/tftespi.cpp
+index b9579f7..8db6867 100644
+--- a/src/backends/tftespi.cpp
++++ b/src/backends/tftespi.cpp
+@@ -21,7 +21,11 @@ TFT_eSPI *tft_display::native() { return static_cast<TFT_eSPI *>(this); }
+ 
+ void tft_display::sleep(bool value) { (void)value; }
+ 
+-tft_sprite::tft_sprite(tft_display *parent) : TFT_eSprite(static_cast<TFT_eSPI *>(parent)) {}
++tft_sprite::tft_sprite(tft_display *parent) : TFT_eSprite(static_cast<TFT_eSPI *>(parent))
++#if USE_TFT_FRAMEBUFFER
++    , destination(parent)
++#endif
++{}
+ 
+ void *tft_sprite::createSprite(int16_t w, int16_t h, uint8_t frames) {
+     return TFT_eSprite::createSprite(w, h, frames);
+@@ -56,6 +60,13 @@ void tft_sprite::drawFastVLine(int32_t x, int32_t y, int32_t h, uint32_t color)
+ }
+ 
+ void tft_sprite::pushSprite(int32_t x, int32_t y, uint32_t transparent) {
++#if USE_TFT_FRAMEBUFFER
++    if (destination->frame.created()) {
++        TFT_eSprite::pushToSprite(&destination->frame,x,y,transparent);
++        destination->dirty = true;
++        return;
++    }
++#endif
+     TFT_eSprite::pushSprite(x, y, transparent);
+ }
+ 
+@@ -80,18 +91,32 @@ void tft_sprite::pushImage(
+ 
+ TFT_eSprite *tft_sprite::nativeSprite() { return static_cast<TFT_eSprite *>(this); }
+ int16_t tft_display::drawString(const String &string, int32_t x, int32_t y, uint8_t font) {
++#if USE_TFT_FRAMEBUFFER
++    if (frame.created()) { dirty = true; return frame.drawString(string,x,y,font); }
++#endif
+     return TFT_eSPI::drawString(string, x, y, font);
+ }
+ 
+ int16_t tft_display::drawCentreString(const String &string, int32_t x, int32_t y, uint8_t font) {
++#if USE_TFT_FRAMEBUFFER
++    if (frame.created()) { dirty = true; return frame.drawCentreString(string,x,y,font); }
++#endif
+     return TFT_eSPI::drawCentreString(string, x, y, font);
+ }
+ 
+ int16_t tft_display::drawRightString(const String &string, int32_t x, int32_t y, uint8_t font) {
++#if USE_TFT_FRAMEBUFFER
++    if (frame.created()) { dirty = true; return frame.drawRightString(string,x,y,font); }
++#endif
+     return TFT_eSPI::drawRightString(string, x, y, font);
+ }
+ 
+-size_t tft_display::write(uint8_t c) { return TFT_eSPI::write(c); }
++size_t tft_display::write(uint8_t c) {
++#if USE_TFT_FRAMEBUFFER
++    if (frame.created()) { dirty=true; return frame.write(c); }
++#endif
++    return TFT_eSPI::write(c);
++}
+ 
+ size_t tft_display::write(const uint8_t *buffer, size_t size) {
+     // TFT_eSPI's write(uint8_t) hides Print's buffer overload.
+diff --git a/src/backends/tftespi.h b/src/backends/tftespi.h
+index be158c9..2891d57 100644
+--- a/src/backends/tftespi.h
++++ b/src/backends/tftespi.h
+@@ -15,8 +15,64 @@ public:
+     friend class tft_sprite;
+     friend class tft_logger;
+ 
+-    using TFT_eSPI::begin;
+-    using TFT_eSPI::color565;
++#if USE_TFT_FRAMEBUFFER
++    TFT_eSprite frame{this};
++    bool dirty = false;
++    bool enableFrame() {
++        if (!frame.createSprite(width(), height())) return false;
++        frame.fillSprite(TFT_BLACK);
++        dirty = true;
++        return true;
++    }
++    void presentFrame() {
++        if (!dirty) return;
++        frame.pushSprite(0, 0);
++        dirty = false;
++    }
++    // Keep physical panel control separate from drawing into the RGB565 sprite.
++#define FRAME_DRAW(name) template<class... Args> void name(Args... args) { \
++        if (frame.created()) { frame.name(args...); dirty = true; } else TFT_eSPI::name(args...); }
++#define FRAME_STATE(name) template<class... Args> decltype(auto) name(Args... args) { \
++        if (frame.created()) { return frame.name(args...); } return TFT_eSPI::name(args...); }
++    FRAME_DRAW(drawArc)
++    FRAME_DRAW(drawCircle)
++    FRAME_DRAW(drawEllipse)
++    FRAME_DRAW(drawFastHLine)
++    FRAME_DRAW(drawFastVLine)
++    FRAME_DRAW(drawLine)
++    FRAME_DRAW(drawPixel)
++    FRAME_DRAW(drawRect)
++    FRAME_DRAW(drawRoundRect)
++    FRAME_DRAW(drawTriangle)
++    FRAME_DRAW(drawWideLine)
++    FRAME_DRAW(drawXBitmap)
++    FRAME_DRAW(fillCircle)
++    FRAME_DRAW(fillEllipse)
++    FRAME_DRAW(fillRect)
++    FRAME_DRAW(fillRectHGradient)
++    FRAME_DRAW(fillRectVGradient)
++    FRAME_DRAW(fillRoundRect)
++    FRAME_DRAW(fillTriangle)
++    FRAME_STATE(getCursorX)
++    FRAME_STATE(getCursorY)
++    FRAME_STATE(getSwapBytes)
++    FRAME_STATE(getTextDatum)
++    FRAME_STATE(setCursor)
++    FRAME_STATE(setSwapBytes)
++    FRAME_STATE(setTextColor)
++    FRAME_STATE(setTextDatum)
++    FRAME_STATE(setTextFont)
++    FRAME_STATE(setTextSize)
++    FRAME_STATE(setTextWrap)
++    FRAME_STATE(textWidth)
++    FRAME_STATE(fontHeight)
++    void fillScreen(uint32_t c) { if (frame.created()) { frame.fillSprite(c); dirty=true; } else TFT_eSPI::fillScreen(c); }
++    void pushImage(int32_t x,int32_t y,int32_t w,int32_t h,uint16_t *data) {
++        if (frame.created()) { frame.pushImage(x,y,w,h,data); dirty=true; } else TFT_eSPI::pushImage(x,y,w,h,data);
++    }
++#undef FRAME_DRAW
++#undef FRAME_STATE
++#else
+     using TFT_eSPI::drawArc;
+     using TFT_eSPI::drawCircle;
+     using TFT_eSPI::drawEllipse;
+@@ -35,22 +91,12 @@ public:
+     using TFT_eSPI::fillRectHGradient;
+     using TFT_eSPI::fillRectVGradient;
+     using TFT_eSPI::fillRoundRect;
+-    using TFT_eSPI::fillScreen;
+     using TFT_eSPI::fillTriangle;
+-    using TFT_eSPI::fontHeight;
+     using TFT_eSPI::getCursorX;
+     using TFT_eSPI::getCursorY;
+     using TFT_eSPI::getSwapBytes;
+     using TFT_eSPI::getTextDatum;
+-    using TFT_eSPI::height;
+-    using TFT_eSPI::init;
+-    using TFT_eSPI::invertDisplay;
+-    using TFT_eSPI::print;
+-    using TFT_eSPI::printf;
+-    using TFT_eSPI::println;
+-    using TFT_eSPI::pushImage;
+     using TFT_eSPI::setCursor;
+-    using TFT_eSPI::setRotation;
+     using TFT_eSPI::setSwapBytes;
+     using TFT_eSPI::setTextColor;
+     using TFT_eSPI::setTextDatum;
+@@ -58,6 +104,19 @@ public:
+     using TFT_eSPI::setTextSize;
+     using TFT_eSPI::setTextWrap;
+     using TFT_eSPI::textWidth;
++    using TFT_eSPI::fontHeight;
++    using TFT_eSPI::fillScreen;
++#endif
++    using TFT_eSPI::begin;
++    using TFT_eSPI::color565;
++    using TFT_eSPI::height;
++    using TFT_eSPI::init;
++    using TFT_eSPI::invertDisplay;
++    using TFT_eSPI::print;
++    using TFT_eSPI::printf;
++    using TFT_eSPI::println;
++    using TFT_eSPI::pushImage;
++    using TFT_eSPI::setRotation;
+     using TFT_eSPI::width;
+     using TFT_eSPI::writecommand;
+ 
+@@ -99,6 +158,9 @@ public:
+ 
+ class tft_sprite : private TFT_eSprite {
+ public:
++#if USE_TFT_FRAMEBUFFER
++    tft_display *destination;
++#endif
+     explicit tft_sprite(tft_display *parent);
+     ~tft_sprite() = default;
+ 

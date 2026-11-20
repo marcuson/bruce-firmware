@@ -547,6 +547,9 @@ void setup() {
     _late_setup_gpio();
 #if !defined(USE_DUMMY_TFT)
     bruceConfig.openThemeFile(bruceConfig.themeFS(), bruceConfig.themePath, false);
+#if USE_TFT_FRAMEBUFFER
+    if (!tft.enableFrame()) log_e("Display framebuffer allocation failed");
+#endif
     if (!bruceConfig.instantBoot) {
         boot_screen_anim();
         startup_sound();

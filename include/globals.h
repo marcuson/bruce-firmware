@@ -243,6 +243,9 @@ void inputLock();
 void inputUnlock();
 
 extern inline bool check(volatile bool &btn, bool resetButtonStatus = true) {
+#if USE_TFT_FRAMEBUFFER
+    tft.presentFrame();
+#endif
     if (!btn) return false;
 #ifdef HAS_ENCODER
     // NextPress/PrevPress here are rotary-encoder-derived, not raw mechanical
